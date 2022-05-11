@@ -1,6 +1,7 @@
 #  CS 378 -- dataset artifact 
 
 Credit: Project by Kaj Bostrom, Jifan Chen, and Greg Durrett. Code by Kaj Bostrom and Jifan Chen.
+
 Modified by Tianwei Yin 
 
 See scripts.sh for details to generate the data maps and train models on subsets. 
