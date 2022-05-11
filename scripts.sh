@@ -21,16 +21,6 @@ python run.py --do_eval  --task nli --dataset snli --output_dir snli   --model .
 
 python run.py --do_train --task nli --dataset snli --output_dir hard_snli   --per_device_train_batch_size 192  --subset  --metric confidence  --do_eval
 
-full eval: 0.6397073864936829 
-
-66.95
-
 // easy 
 python run.py --do_eval  --task nli --dataset snli --output_dir snli   --model ./old_snli/checkpoint-4500  --output_dir null  --per_device_eval_batch_size  192  --subset  --eval_train  --metric confidence --worst
 
-100 
-
-full eval: 0.7829709649085999
-
-
-ambiguious 0.8327575922012329
