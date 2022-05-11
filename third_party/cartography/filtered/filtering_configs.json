@@ -1,0 +1,15 @@
+{
+    "both_ends": false,
+    "burn_out": 100,
+    "data_dir": "/Users/swabhas/data/glue/WINOGRANDE/xl",
+    "filter": true,
+    "filtering_output_dir": "/home/tianweiy/Projects/cs378_fp/third_party/cartography/filtered",
+    "include_ci": false,
+    "metric": "confidence",
+    "model": "ELECTRA",
+    "model_dir": "/home/tianweiy/Projects/cs378_fp/third_party/cartography/models",
+    "plot": false,
+    "plots_dir": "/home/tianweiy/Projects/cs378_fp/third_party/cartography/cartography",
+    "task_name": "SNLI",
+    "worst": true
+}

@@ -5,9 +5,47 @@ from helpers import prepare_dataset_nli, prepare_train_dataset_qa, \
     prepare_validation_dataset_qa, QuestionAnsweringTrainer, compute_accuracy
 import os
 import json
+from scipy.special import softmax  
+import pandas as pd 
+from tqdm import tqdm 
 
-NUM_PREPROCESSING_WORKERS = 2
+NUM_PREPROCESSING_WORKERS = 4
 
+def consider_ascending_order(filtering_metric: str) -> bool:
+  """
+  Determine if the metric values' sorting order to get the most `valuable` examples for training.
+  """
+  if filtering_metric == "variability":
+    return False
+  elif filtering_metric == "confidence":
+    return True
+  elif filtering_metric == "threshold_closeness":
+    return False
+  elif filtering_metric == "forgetfulness":
+    return False
+  elif filtering_metric == "correctness":
+    return True
+  else:
+    raise NotImplementedError(f"Filtering based on {filtering_metric} not implemented!")
+
+def subsample_dataset(args, train_dy_metrics, dataset):
+    is_ascending = consider_ascending_order(args.metric)
+    if args.worst:
+        is_ascending = not is_ascending
+
+    sorted_scores = train_dy_metrics.sort_values(by=[args.metric],
+                                                ascending=is_ascending)
+
+    num_samples = int(0.3319 * len(dataset))
+    selected = sorted_scores.head(n=num_samples+1)
+
+    indices = [] 
+
+    for idx in tqdm(range(num_samples)):
+        indices.append(int(selected.iloc[idx]["guid"]))
+
+    sub_dataset = dataset.select(indices)
+    return sub_dataset 
 
 def main():
     argp = HfArgumentParser(TrainingArguments)
@@ -46,6 +84,21 @@ def main():
                       help='Limit the number of examples to train on.')
     argp.add_argument('--max_eval_samples', type=int, default=None,
                       help='Limit the number of examples to evaluate on.')
+    argp.add_argument("--eval_train", action='store_true')
+    argp.add_argument("--subset", action='store_true')
+    argp.add_argument("--worst",
+                      action="store_true",
+                      help="Select from the opposite end of the spectrum acc. to metric,"
+                           "for baselines")
+
+    argp.add_argument('--metric',
+                      choices=('threshold_closeness',
+                               'confidence',
+                               'variability',
+                               'correctness',
+                               'forgetfulness'),
+                      help="Metric to filter data by.",)
+
 
     training_args, args = argp.parse_args_into_dataclasses()
 
@@ -65,6 +118,7 @@ def main():
         # MNLI has two validation splits (one with matched domains and one with mismatched domains). Most datasets just have one "validation" split
         eval_split = 'validation_matched' if dataset_id == ('glue', 'mnli') else 'validation'
         # Load the raw data
+
         dataset = datasets.load_dataset(*dataset_id)
     
     # NLI models need to have the output label count specified (label 0 is "entailed", 1 is "neutral", and 2 is "contradiction")
@@ -74,6 +128,7 @@ def main():
     model_classes = {'qa': AutoModelForQuestionAnswering,
                      'nli': AutoModelForSequenceClassification}
     model_class = model_classes[args.task]
+
     # Initialize the model and tokenizer from the specified pretrained model/checkpoint
     model = model_class.from_pretrained(args.model, **task_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
@@ -100,8 +155,13 @@ def main():
     eval_dataset_featurized = None
     if training_args.do_train:
         train_dataset = dataset['train']
+        if args.subset:
+            train_dy_metrics = pd.read_pickle('resources/full.pkl')
+            train_dataset = subsample_dataset(args, train_dy_metrics, train_dataset)
+
         if args.max_train_samples:
             train_dataset = train_dataset.select(range(args.max_train_samples))
+
         train_dataset_featurized = train_dataset.map(
             prepare_train_dataset,
             batched=True,
@@ -109,15 +169,34 @@ def main():
             remove_columns=train_dataset.column_names
         )
     if training_args.do_eval:
-        eval_dataset = dataset[eval_split]
+        if args.eval_train:
+            eval_dataset = dataset['train']
+            prepare_dataset = prepare_train_dataset
+        else:
+            eval_dataset = dataset[eval_split]
+            prepare_dataset = prepare_eval_dataset
+
+        if args.subset:
+            train_dy_metrics = pd.read_pickle('resources/full.pkl')
+            eval_dataset = subsample_dataset(args, train_dy_metrics, eval_dataset)
+
+
+        import pdb; pdb.set_trace()
+
         if args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
+
+        is_ascending = consider_ascending_order(args.metric)
+        if args.worst:
+            is_ascending = not is_ascending
+
         eval_dataset_featurized = eval_dataset.map(
-            prepare_eval_dataset,
+            prepare_dataset,
             batched=True,
             num_proc=NUM_PREPROCESSING_WORKERS,
             remove_columns=eval_dataset.column_names
         )
+
 
     # Select the training configuration
     trainer_class = Trainer
@@ -154,51 +233,37 @@ def main():
         tokenizer=tokenizer,
         compute_metrics=compute_metrics_and_store_predictions
     )
-    # Train and/or evaluate
+
     if training_args.do_train:
         trainer.train()
         trainer.save_model()
-        # If you want to customize the way the loss is computed, you should subclass Trainer and override the "compute_loss"
-        # method (see https://huggingface.co/transformers/_modules/transformers/trainer.html#Trainer.compute_loss).
-        #
-        # You can also add training hooks using Trainer.add_callback:
-        #   See https://huggingface.co/transformers/main_classes/trainer.html#transformers.Trainer.add_callback
-        #   and https://huggingface.co/transformers/main_classes/callback.html#transformers.TrainerCallback
 
     if training_args.do_eval:
         results = trainer.evaluate(**eval_kwargs)
-
-        # To add custom metrics, you should replace the "compute_metrics" function (see comments above).
-        #
-        # If you want to change how predictions are computed, you should subclass Trainer and override the "prediction_step"
-        # method (see https://huggingface.co/transformers/_modules/transformers/trainer.html#Trainer.prediction_step).
-        # If you do this your custom prediction_step should probably start by calling super().prediction_step and modifying the
-        # values that it returns.
-
-        print('Evaluation results:')
+        print(f'Evaluation results: {args.model}')
         print(results)
 
-        os.makedirs(training_args.output_dir, exist_ok=True)
+        idx = int(str(args.model).split('-')[-1]) // 1500 - 1
 
-        with open(os.path.join(training_args.output_dir, 'eval_metrics.json'), encoding='utf-8', mode='w') as f:
-            json.dump(results, f)
+        # os.makedirs(training_args.output_dir+'/training_dynamics', exist_ok=True)
 
-        with open(os.path.join(training_args.output_dir, 'eval_predictions.jsonl'), encoding='utf-8', mode='w') as f:
-            if args.task == 'qa':
-                predictions_by_id = {pred['id']: pred['prediction_text'] for pred in eval_predictions.predictions}
-                for example in eval_dataset:
-                    example_with_prediction = dict(example)
-                    example_with_prediction['predicted_answer'] = predictions_by_id[example['id']]
-                    f.write(json.dumps(example_with_prediction))
-                    f.write('\n')
-            else:
-                for i, example in enumerate(eval_dataset):
-                    example_with_prediction = dict(example)
-                    example_with_prediction['predicted_scores'] = eval_predictions.predictions[i].tolist()
-                    example_with_prediction['predicted_label'] = int(eval_predictions.predictions[i].argmax())
-                    f.write(json.dumps(example_with_prediction))
-                    f.write('\n')
+        """with open(os.path.join(training_args.output_dir, 'training_dynamics',
+            f'dynamics_epoch_{idx}.jsonl'), encoding='utf-8', mode='w') as f:
 
+            for i, example in enumerate(eval_dataset):
+                example_with_prediction = dict(example)
+                # example_with_prediction['predicted_scores'] = eval_predictions.predictions[i].tolist()
+                # example_with_prediction['predicted_label'] = int(eval_predictions.predictions[i].argmax())
+
+                example_with_prediction['guid']= i 
+                example_with_prediction[f'logits_epoch_{idx}'] = softmax(eval_predictions.predictions[i]).tolist()
+                example_with_prediction['gold'] = example_with_prediction['label']
+                example_with_prediction.pop('premise')
+                example_with_prediction.pop('hypothesis')
+
+                f.write(json.dumps(example_with_prediction))
+                f.write('\n')
+        """
 
 if __name__ == "__main__":
     main()
