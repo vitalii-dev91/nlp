@@ -2,7 +2,7 @@
 
 Credit: Project by Kaj Bostrom, Jifan Chen, and Greg Durrett. Code by Kaj Bostrom and Jifan Chen.
 
-Modified by Tianwei Yin 
+Modified by Vitalii Serdiuk 
 
 See scripts.sh for details to generate the data maps and train models on subsets. 
 
